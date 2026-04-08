@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Greenhouse Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Gunakan MQTT.js versi 5.0.0 -->
+    <script src="https://unpkg.com/mqtt@5.0.0/dist/mqtt.min.js"></script>
+</head>
+<body>
+    <!-- Your HTML content here (same as before) -->
+    <div class="container">
+        <header class="header">
+            <h1>🌿 Smart Greenhouse Control System</h1>
+            <div class="status-bar">
+                <div class="connection-status" id="connectionStatus">
+                    <span class="status-dot"></span>
+                    Initializing...
+                </div>
+                <div id="timestamp" class="timestamp"></div>
+            </div>
+        </header>
+
+        <div class="main-grid">
+            <!-- Temperature Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">🌡️</span>
+                    <h3>Temperature</h3>
+                </div>
+                <div class="card-value">
+                    <span id="temperature" class="value">--</span>
+                    <span class="unit">°C</span>
+                </div>
+                <div class="progress-bar">
+                    <div id="tempBar" class="progress-fill temp-fill"></div>
+                </div>
+                <div id="tempStatus" class="status-text">Loading...</div>
+            </div>
+
+            <!-- Soil Moisture Average Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-icon">💧</span>
+                    <h3>Average Soil Moisture</h3>
+                </div>
+                <div class="card-value">
+                    <span id="soilAvg" class="value">--</span>
+                    <span class="unit">%</span>
+                </div>
+                <div class="progress-bar">
+                    <div id="soilBar" class="progress-fill soil-fill"></div>
+                </div>
+            </div>
+
+            <!-- Individual Sensors Card -->
+            <div class="card sensors-card">
+                <div class="card-header">
+                    <span class="card-icon">🪴</span>
+                    <h3>Individual Soil Sensors</h3>
+                </div>
+                <div class="sensors-grid">
+                    <div class="sensor-item">
+                        <label>Sensor 1</label>
+                        <div class="sensor-value">
+                            <span id="soil1" class="value">--</span>
+                            <span class="unit">%</span>
+                        </div>
+                    </div>
+                    <div class="sensor-item">
+                        <label>Sensor 2</label>
+                        <div class="sensor-value">
+                            <span id="soil2" class="value">--</span>
+                            <span class="unit">%</span>
+                        </div>
+                    </div>
+                    <div class="sensor-item">
+                        <label>Sensor 3</label>
+                        <div class="sensor-value">
+                            <span id="soil3" class="value">--</span>
+                            <span class="unit">%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mode Control Card -->
+            <div class="card mode-card">
+                <div class="card-header">
+                    <span class="card-icon">🎮</span>
+                    <h3>Control Mode</h3>
+                </div>
+                <div class="mode-buttons">
+                    <button id="autoMode" class="mode-btn active" onclick="setMode(true)">
+                        <span>🤖</span> Automatic
+                    </button>
+                    <button id="manualMode" class="mode-btn" onclick="setMode(false)">
+                        <span>👆</span> Manual
+                    </button>
+                </div>
+            </div>
+
+            <!-- Actuator Controls Card -->
+            <div class="card actuators-card">
+                <div class="card-header">
+                    <span class="card-icon">⚙️</span>
+                    <h3>Actuator Controls</h3>
+                </div>
+                <div class="actuators-grid">
+                    <div class="actuator-item">
+                        <div class="actuator-info">
+                            <span class="actuator-icon">💡</span>
+                            <span>UV Light</span>
+                        </div>
+                        <button id="uvBtn" class="control-btn off" onclick="toggleActuator('uv')">OFF</button>
+                    </div>
+                    <div class="actuator-item">
+                        <div class="actuator-info">
+                            <span class="actuator-icon">🚰</span>
+                            <span>Water Pump</span>
+                        </div>
+                        <button id="pumpBtn" class="control-btn off" onclick="toggleActuator('pump')">OFF</button>
+                    </div>
+                    <div class="actuator-item">
+                        <div class="actuator-info">
+                            <span class="actuator-icon">🌀</span>
+                            <span>Cooling Fan</span>
+                        </div>
+                        <button id="fanBtn" class="control-btn off" onclick="toggleActuator('fan')">OFF</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Card -->
+            <div class="card charts-card">
+                <div class="card-header">
+                    <span class="card-icon">📊</span>
+                    <h3>Historical Data</h3>
+                </div>
+                <div class="charts-container">
+                    <div class="chart-wrapper">
+                        <canvas id="tempChart"></canvas>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="soilChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
