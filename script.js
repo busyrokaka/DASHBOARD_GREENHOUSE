@@ -1,347 +1,247 @@
-// ================= KONFIGURASI HIVEMQ CLOUD =================
-// ⚠️ PERHATIAN: Ganti dengan kredensial Anda dari HiveMQ Cloud
+// ================= MQTT CONFIG =================
 const MQTT_CONFIG = {
-    // Gunakan port 8884 untuk WebSocket Secure (WSS)
     url: 'wss://062eb6c7e7a340739ba840bf0bd6f8a2.s1.eu.hivemq.cloud:8884/mqtt',
-    username: 'Dashboard_Greenhouse1314',     // Ganti dengan username Anda
-    password: 'GreenHouse7',     // Ganti dengan password Anda
-    clientId: 'web_dashboard_' + Math.random().toString(16).substr(2, 8)
+    username: 'Dashboard_Greenhouse1314',
+    password: 'GreenHouse7',
+    clientId: 'web_dash_' + Math.random().toString(16).substr(2, 8)
 };
 
 const TOPICS = {
     sensor: 'greenhouse/sensor/data',
-    command: 'greenhouse/command'
+    command: 'greenhouse/command',
+    setpoint: 'greenhouse/setpoint',
+    connection: 'greenhouse/connection'
 };
 
-// ================= GLOBAL VARIABLES =================
-let mqttClient = null;
+// ================= VARIABLES =================
+let client = null;
 let tempChart, soilChart;
-let isAutoMode = true;
+let isAuto = true;
 let reconnectAttempts = 0;
 let messageQueue = [];
+let espConnected = false;
+let lastEspResponse = 0;
 
-// ================= INITIALIZATION =================
+const setpoints = { tempMin: 20, tempMax: 30, soilMin: 50, soilMax: 80 };
+
+// ================= CHARTS =================
 function initCharts() {
     const tempCtx = document.getElementById('tempChart').getContext('2d');
     const soilCtx = document.getElementById('soilChart').getContext('2d');
     
     tempChart = new Chart(tempCtx, {
         type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'Temperature (°C)',
-                data: [],
-                borderColor: '#ef4444',
-                backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                borderWidth: 2,
-                tension: 0.4,
-                fill: true
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: true,
-            plugins: {
-                legend: {
-                    display: true,
-                    position: 'top',
-                    labels: { color: '#1f2937' }
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: false,
-                    grid: { color: '#e5e7eb' },
-                    ticks: { color: '#6b7280' }
-                },
-                x: {
-                    ticks: { 
-                        maxRotation: 45,
-                        minRotation: 45,
-                        color: '#6b7280'
-                    }
-                }
-            }
-        }
+        data: { labels: [], datasets: [{ label: 'Temperature (°C)', data: [], borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', borderWidth: 2, tension: 0.4, fill: true }] },
+        options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: true } }, scales: { y: { min: 20, max: 35 } } }
     });
     
     soilChart = new Chart(soilCtx, {
         type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'Soil Moisture (%)',
-                data: [],
-                borderColor: '#10b981',
-                backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                borderWidth: 2,
-                tension: 0.4,
-                fill: true
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: true,
-            plugins: {
-                legend: {
-                    display: true,
-                    position: 'top',
-                    labels: { color: '#1f2937' }
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 100,
-                    grid: { color: '#e5e7eb' },
-                    ticks: { color: '#6b7280' }
-                },
-                x: {
-                    ticks: { 
-                        maxRotation: 45,
-                        minRotation: 45,
-                        color: '#6b7280'
-                    }
-                }
-            }
-        }
+        data: { labels: [], datasets: [{ label: 'Soil Moisture (%)', data: [], borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.1)', borderWidth: 2, tension: 0.4, fill: true }] },
+        options: { responsive: true, maintainAspectRatio: true, scales: { y: { min: 0, max: 100 } } }
     });
 }
 
-// ================= UI UPDATE FUNCTIONS =================
+// ================= UI UPDATE =================
 function updateUI(data) {
-    console.log('Updating UI with data:', data);
+    // Update Temperature
+    document.getElementById('temperature').textContent = data.temperature.toFixed(1);
+    const tempPercent = ((data.temperature - 20) / 15) * 100;
+    document.getElementById('tempBar').style.width = Math.min(Math.max(tempPercent, 0), 100) + '%';
+    document.getElementById('tempBar').textContent = data.temperature.toFixed(1) + '°C';
     
-    // Update temperature
-    const tempValue = document.getElementById('temperature');
-    const tempBar = document.getElementById('tempBar');
     const tempStatus = document.getElementById('tempStatus');
-    
-    if (tempValue) tempValue.textContent = data.temperature.toFixed(1);
-    if (tempBar) {
-        const tempPercent = Math.min((data.temperature / 50) * 100, 100);
-        tempBar.style.width = tempPercent + '%';
+    if (data.temperature > setpoints.tempMax) {
+        tempStatus.textContent = '⚠️ Overheat!';
+        tempStatus.style.background = '#fee2e2';
+        tempStatus.style.color = '#dc2626';
+    } else if (data.temperature < setpoints.tempMin) {
+        tempStatus.textContent = '❄️ Too Cold';
+        tempStatus.style.background = '#dbeafe';
+        tempStatus.style.color = '#2563eb';
+    } else {
+        tempStatus.textContent = '✅ Optimal';
+        tempStatus.style.background = '#d1fae5';
+        tempStatus.style.color = '#059669';
     }
     
-    if (tempStatus) {
-        if (data.temperature > 30) {
-            tempStatus.textContent = '⚠️ Overheat!';
-            tempStatus.style.background = '#fee2e2';
-            tempStatus.style.color = '#dc2626';
-        } else if (data.temperature < 20) {
-            tempStatus.textContent = '❄️ Too Cold';
-            tempStatus.style.background = '#dbeafe';
-            tempStatus.style.color = '#2563eb';
-        } else {
-            tempStatus.textContent = '✅ Optimal';
-            tempStatus.style.background = '#d1fae5';
-            tempStatus.style.color = '#059669';
-        }
+    // Update Soil
+    document.getElementById('soilAvg').textContent = Math.round(data.soil_avg);
+    document.getElementById('soilBar').style.width = data.soil_avg + '%';
+    document.getElementById('soilBar').textContent = Math.round(data.soil_avg) + '%';
+    
+    const soilStatus = document.getElementById('soilStatus');
+    if (data.soil_avg < setpoints.soilMin) {
+        soilStatus.textContent = '💧 Too Dry!';
+        soilStatus.style.background = '#fed7aa';
+        soilStatus.style.color = '#c2410c';
+    } else if (data.soil_avg > setpoints.soilMax) {
+        soilStatus.textContent = '🌊 Too Wet';
+        soilStatus.style.background = '#bfdbfe';
+        soilStatus.style.color = '#1e40af';
+    } else {
+        soilStatus.textContent = '✅ Ideal';
+        soilStatus.style.background = '#d1fae5';
+        soilStatus.style.color = '#065f46';
     }
     
-    // Update soil moisture average
-    const soilAvg = document.getElementById('soilAvg');
-    const soilBar = document.getElementById('soilBar');
-    if (soilAvg) soilAvg.textContent = Math.round(data.soil_avg);
-    if (soilBar) soilBar.style.width = data.soil_avg + '%';
+    // Update Individual Sensors
+    updateSensor('soil1', data.soil1);
+    updateSensor('soil2', data.soil2);
+    updateSensor('soil3', data.soil3);
     
-    // Update individual sensors
-    const soil1 = document.getElementById('soil1');
-    const soil2 = document.getElementById('soil2');
-    const soil3 = document.getElementById('soil3');
-    if (soil1) soil1.textContent = data.soil1;
-    if (soil2) soil2.textContent = data.soil2;
-    if (soil3) soil3.textContent = data.soil3;
+    // Update Actuators
+    updateActuator('uv', data.uv);
+    updateActuator('pump', data.pump);
+    updateActuator('fan', data.fan);
     
-    // Update actuator buttons
-    updateActuatorButton('uv', data.uv);
-    updateActuatorButton('pump', data.pump);
-    updateActuatorButton('fan', data.fan);
+    if (data.hasOwnProperty('auto_mode')) {
+        isAuto = data.auto_mode;
+        updateModeUI();
+    }
     
-    // Update mode
-    isAutoMode = data.auto_mode;
-    updateModeUI();
-    
-    // Update charts
-    updateCharts(data);
+    // Update Charts
+    const time = new Date().toLocaleTimeString();
+    updateChart(tempChart, time, data.temperature);
+    updateChart(soilChart, time, data.soil_avg);
 }
 
-function updateActuatorButton(actuator, state) {
-    const btn = document.getElementById(`${actuator}Btn`);
-    if (btn) {
-        btn.textContent = state ? 'ON' : 'OFF';
-        btn.className = `control-btn ${state ? 'on' : 'off'}`;
-        btn.disabled = isAutoMode;
-    }
+function updateSensor(id, value) {
+    document.getElementById(id).textContent = value;
+    const status = document.getElementById(id + 'Status');
+    if (value < setpoints.soilMin) { status.textContent = 'Dry 💧'; status.className = 'sensor-status dry'; }
+    else if (value > setpoints.soilMax) { status.textContent = 'Wet 🌊'; status.className = 'sensor-status wet'; }
+    else { status.textContent = 'Ideal ✅'; status.className = 'sensor-status ideal'; }
+}
+
+function updateActuator(name, state) {
+    const btn = document.getElementById(name + 'Btn');
+    btn.textContent = state ? 'ON' : 'OFF';
+    btn.className = `ctrl-btn ${state ? 'on' : 'off'}`;
+    btn.disabled = isAuto;
 }
 
 function updateModeUI() {
-    const autoBtn = document.getElementById('autoMode');
-    const manualBtn = document.getElementById('manualMode');
-    
-    if (autoBtn && manualBtn) {
-        if (isAutoMode) {
-            autoBtn.classList.add('active');
-            manualBtn.classList.remove('active');
-        } else {
-            autoBtn.classList.remove('active');
-            manualBtn.classList.add('active');
-        }
-    }
-    
-    // Enable/disable manual controls
-    const btns = ['uvBtn', 'pumpBtn', 'fanBtn'];
-    btns.forEach(btnId => {
-        const btn = document.getElementById(btnId);
-        if (btn) btn.disabled = isAutoMode;
-    });
+    document.getElementById('autoBtn').classList.toggle('active', isAuto);
+    document.getElementById('manualBtn').classList.toggle('active', !isAuto);
+    document.getElementById('modeText').textContent = isAuto ? 'AUTOMATIC' : 'MANUAL';
+    document.getElementById('modeText').style.color = isAuto ? '#10b981' : '#f59e0b';
+    ['uvBtn', 'pumpBtn', 'fanBtn'].forEach(id => document.getElementById(id).disabled = isAuto);
 }
 
-function updateCharts(data) {
-    const timestamp = new Date().toLocaleTimeString();
-    
-    // Update temperature chart
-    if (tempChart && tempChart.data) {
-        if (tempChart.data.labels.length > 20) {
-            tempChart.data.labels.shift();
-            tempChart.data.datasets[0].data.shift();
-        }
-        tempChart.data.labels.push(timestamp);
-        tempChart.data.datasets[0].data.push(data.temperature);
-        tempChart.update('none');
-    }
-    
-    // Update soil chart
-    if (soilChart && soilChart.data) {
-        if (soilChart.data.labels.length > 20) {
-            soilChart.data.labels.shift();
-            soilChart.data.datasets[0].data.shift();
-        }
-        soilChart.data.labels.push(timestamp);
-        soilChart.data.datasets[0].data.push(data.soil_avg);
-        soilChart.update('none');
-    }
+function updateSetpoints(data) {
+    Object.assign(setpoints, data);
+    document.getElementById('tempMin').textContent = setpoints.tempMin;
+    document.getElementById('tempMax').textContent = setpoints.tempMax;
+    document.getElementById('soilMin').textContent = setpoints.soilMin;
+    document.getElementById('soilMax').textContent = setpoints.soilMax;
 }
 
-// ================= MQTT FUNCTIONS =================
-function updateConnectionStatus(connected, message = '') {
-    const statusDiv = document.getElementById('connectionStatus');
-    if (!statusDiv) return;
-    
-    const dot = statusDiv.querySelector('.status-dot');
-    
-    if (connected) {
-        if (dot) dot.classList.add('connected');
-        statusDiv.innerHTML = '<span class="status-dot connected"></span> ✅ Connected to HiveMQ Cloud';
-        reconnectAttempts = 0;
-        // Kirim pesan yang tertunda
-        while (messageQueue.length > 0) {
-            const msg = messageQueue.shift();
-            publishMessage(msg.topic, msg.message);
-        }
-    } else {
-        if (dot) dot.classList.remove('connected');
-        statusDiv.innerHTML = `<span class="status-dot"></span> ⚠️ ${message || 'Disconnected - Reconnecting...'}`;
+function updateChart(chart, label, value) {
+    if (chart.data.labels.length > 20) {
+        chart.data.labels.shift();
+        chart.data.datasets[0].data.shift();
     }
+    chart.data.labels.push(label);
+    chart.data.datasets[0].data.push(value);
+    chart.update('none');
 }
 
-function publishMessage(topic, message) {
-    if (mqttClient && mqttClient.connected) {
-        mqttClient.publish(topic, message);
-        console.log('Message published:', topic, message);
+function updateConnectionStatus(connected, message) {
+    const dot = document.querySelector('.dot');
+    const text = document.getElementById('statusText');
+    dot.className = `dot ${connected ? 'online' : ''}`;
+    text.textContent = connected ? '✅ Online (ESP connected)' : `⚠️ ${message || 'Offline'}`;
+    if (connected) lastEspResponse = Date.now();
+}
+
+function updateTimestamp() {
+    document.getElementById('timestamp').textContent = 'Last update: ' + new Date().toLocaleString('id-ID');
+}
+
+// ================= MQTT =================
+function publish(topic, message) {
+    if (client && client.connected) {
+        client.publish(topic, message);
     } else {
         messageQueue.push({ topic, message });
-        console.log('Message queued:', topic, message);
     }
 }
 
 function setMode(auto) {
-    const message = JSON.stringify({ mode: auto });
-    publishMessage(TOPICS.command, message);
-    isAutoMode = auto;
+    publish(TOPICS.command, JSON.stringify({ mode: auto }));
+    isAuto = auto;
     updateModeUI();
 }
 
-function toggleActuator(actuator) {
-    if (!isAutoMode) {
-        const btn = document.getElementById(`${actuator}Btn`);
-        const currentState = btn.textContent === 'ON';
-        const message = JSON.stringify({ [actuator]: !currentState });
-        publishMessage(TOPICS.command, message);
+function toggleActuator(name) {
+    if (!isAuto) {
+        const btn = document.getElementById(name + 'Btn');
+        const state = btn.textContent === 'OFF';
+        publish(TOPICS.command, JSON.stringify({ [name]: state }));
     }
 }
 
 function connectMQTT() {
-    console.log('Attempting to connect to HiveMQ Cloud...');
-    console.log('URL:', MQTT_CONFIG.url);
-    
     const options = {
         clientId: MQTT_CONFIG.clientId,
         username: MQTT_CONFIG.username,
         password: MQTT_CONFIG.password,
         clean: true,
-        reconnectPeriod: 0, // Kita handle reconnect manual
-        connectTimeout: 30 * 1000,
-        keepalive: 60,
-        protocol: 'wss'
+        reconnectPeriod: 0,
+        connectTimeout: 30000,
+        keepalive: 60
     };
     
     try {
-        mqttClient = mqtt.connect(MQTT_CONFIG.url, options);
+        client = mqtt.connect(MQTT_CONFIG.url, options);
         
-        mqttClient.on('connect', () => {
-            console.log('✅ Connected to HiveMQ Cloud successfully!');
-            updateConnectionStatus(true);
+        client.on('connect', () => {
+            console.log('✅ Connected to HiveMQ');
+            client.subscribe(TOPICS.sensor);
+            client.subscribe(TOPICS.setpoint);
+            client.subscribe(TOPICS.connection);
+            reconnectAttempts = 0;
             
-            // Subscribe ke topic sensor
-            mqttClient.subscribe(TOPICS.sensor, { qos: 1 }, (err) => {
-                if (!err) {
-                    console.log('✅ Subscribed to:', TOPICS.sensor);
-                } else {
-                    console.error('Subscription error:', err);
-                }
-            });
+            // Flush queue
+            while (messageQueue.length > 0) {
+                const msg = messageQueue.shift();
+                client.publish(msg.topic, msg.message);
+            }
             
-            // Request status
+            // Request data
             setTimeout(() => {
-                publishMessage(TOPICS.command, JSON.stringify({ request: 'status' }));
+                publish(TOPICS.command, JSON.stringify({ request: 'status' }));
+                publish(TOPICS.command, JSON.stringify({ request: 'setpoints' }));
             }, 500);
         });
         
-        mqttClient.on('message', (topic, message) => {
-            console.log('📨 Message received on topic:', topic);
-            if (topic === TOPICS.sensor) {
-                try {
-                    const data = JSON.parse(message.toString());
-                    console.log('Data:', data);
+        client.on('message', (topic, message) => {
+            try {
+                const data = JSON.parse(message.toString());
+                if (topic === TOPICS.sensor) {
                     updateUI(data);
                     updateTimestamp();
-                } catch (e) {
-                    console.error('Error parsing message:', e);
+                    // Update connection status based on data receipt
+                    if (!espConnected) {
+                        espConnected = true;
+                        updateConnectionStatus(true);
+                    }
+                } else if (topic === TOPICS.setpoint) {
+                    updateSetpoints(data);
+                } else if (topic === TOPICS.connection) {
+                    espConnected = data.connected;
+                    updateConnectionStatus(data.connected);
                 }
-            }
+            } catch (e) { console.error('Parse error:', e); }
         });
         
-        mqttClient.on('error', (err) => {
-            console.error('❌ MQTT Error:', err);
-            updateConnectionStatus(false, 'Connection error - Retrying...');
-        });
-        
-        mqttClient.on('close', () => {
-            console.log('MQTT connection closed');
-            updateConnectionStatus(false, 'Connection closed - Reconnecting...');
-            scheduleReconnect();
-        });
-        
-        mqttClient.on('offline', () => {
-            console.log('MQTT client offline');
-            updateConnectionStatus(false, 'Offline - Reconnecting...');
-        });
+        client.on('error', () => { updateConnectionStatus(false, 'MQTT Error'); scheduleReconnect(); });
+        client.on('close', () => { updateConnectionStatus(false, 'Disconnected'); scheduleReconnect(); });
+        client.on('offline', () => { updateConnectionStatus(false, 'Offline'); scheduleReconnect(); });
         
     } catch (error) {
-        console.error('Failed to create MQTT connection:', error);
-        updateConnectionStatus(false, 'Connection failed - Retrying...');
+        updateConnectionStatus(false, 'Connection failed');
         scheduleReconnect();
     }
 }
@@ -349,71 +249,34 @@ function connectMQTT() {
 function scheduleReconnect() {
     if (reconnectAttempts < 10) {
         reconnectAttempts++;
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-        console.log(`Reconnecting in ${delay/1000} seconds... (Attempt ${reconnectAttempts})`);
+        const delay = Math.min(2000 * Math.pow(1.5, reconnectAttempts), 30000);
         setTimeout(connectMQTT, delay);
-    } else {
-        updateConnectionStatus(false, 'Failed to connect - Please refresh page');
     }
 }
 
-function updateTimestamp() {
-    const now = new Date();
-    const timestamp = now.toLocaleDateString('id-ID') + ' ' + now.toLocaleTimeString('id-ID');
-    const timestampEl = document.getElementById('timestamp');
-    if (timestampEl) timestampEl.textContent = `Last update: ${timestamp}`;
-}
-
-// ================= DEMO DATA (UNTUK TESTING TANPA ESP32) =================
-let demoInterval = null;
-
-function startDemoMode() {
-    console.log('Starting demo mode...');
-    let demoData = {
-        temperature: 25.5,
-        soil_avg: 65,
-        soil1: 60,
-        soil2: 65,
-        soil3: 70,
-        uv: false,
-        pump: false,
-        fan: false,
-        auto_mode: true
-    };
-    
-    updateUI(demoData);
-    
-    demoInterval = setInterval(() => {
-        // Simulasi perubahan data
-        demoData.temperature = 22 + Math.random() * 10;
-        demoData.soil_avg = 50 + Math.random() * 40;
-        demoData.soil1 = demoData.soil_avg - 5 + Math.random() * 10;
-        demoData.soil2 = demoData.soil_avg - 2 + Math.random() * 10;
-        demoData.soil3 = demoData.soil_avg + 3 + Math.random() * 10;
-        
-        updateUI(demoData);
-        updateTimestamp();
-    }, 3000);
-}
-
-// ================= INITIALIZE =================
+// ================= INIT =================
 window.addEventListener('load', () => {
-    console.log('Page loaded, initializing...');
     initCharts();
+    updateModeUI();
     
-    // Cek apakah MQTT library tersedia
     if (typeof mqtt !== 'undefined') {
-        console.log('MQTT library found, connecting to broker...');
         connectMQTT();
     } else {
-        console.error('MQTT library not loaded! Starting demo mode...');
-        startDemoMode();
+        console.error('MQTT library not loaded');
+        updateConnectionStatus(false, 'MQTT library missing');
     }
     
     updateTimestamp();
     setInterval(updateTimestamp, 1000);
+    
+    // Check ESP connection timeout (3 detik tanpa data = offline)
+    setInterval(() => {
+        if (Date.now() - lastEspResponse > 3000 && espConnected) {
+            espConnected = false;
+            updateConnectionStatus(false, 'ESP timeout');
+        }
+    }, 2000);
 });
 
-// Export functions untuk global access
 window.setMode = setMode;
 window.toggleActuator = toggleActuator;
